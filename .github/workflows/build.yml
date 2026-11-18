@@ -171,7 +171,10 @@ jobs:
             throw "The selected Qt SDK has no Windows platform plugin at $qtPlatforms"
           }
           Get-ChildItem -LiteralPath $qtPlatforms -File | Select-Object Name, Length
-          & $qtDeploy --verbose 2 --release --compiler-runtime --no-translations (Join-Path $portable 'Proxmark3GUI.exe')
+          # Qt 5.15.2 deliberately uses automatic plugin matching for MinGW:
+          # forcing --release misclassifies this SDK's unstripped plugins.
+          # The application itself is still compiled with CONFIG+=release.
+          & $qtDeploy --verbose 2 --compiler-runtime --no-translations (Join-Path $portable 'Proxmark3GUI.exe')
           if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed' }
           Copy-Item LICENSE, OFFLINE.md, MIGRATION_STATUS.md, THIRD_PARTY_NOTICES.md $portable
           Copy-Item LICENSES $portable -Recurse
