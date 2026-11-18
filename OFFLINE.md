@@ -121,7 +121,19 @@ qmake ../src/Proxmark3GUI.pro CONFIG+=release CONFIG-=debug CONFIG-=debug_and_re
 mingw32-make -j2
 ```
 
-Build each `tests/*/*.pro` in its own directory with the same qmake configuration, then run `mingw32-make check`. The workflow discovers these projects automatically and fails if there are none.
+Build each `tests/*/*.pro` in its own directory with the same qmake configuration. From that test build directory, use PowerShell to run the single `tst_*.exe` by its full path and check its exit code:
+
+```powershell
+$testExecutables = @(Get-ChildItem -LiteralPath (Get-Location).Path -File -Filter 'tst_*.exe')
+if ($testExecutables.Count -ne 1) {
+    throw "Expected exactly one tst_*.exe; found $($testExecutables.Count)"
+}
+$testExecutable = $testExecutables[0].FullName
+& $testExecutable
+if ($LASTEXITCODE -ne 0) { throw 'QtTest failed' }
+```
+
+The workflow discovers test projects automatically, requires exactly one matching executable at the root of each build directory, and runs every test executable this way. This avoids relying on qmake's shell wrapper to find a Windows executable. Linux continues to use `make check`.
 
 For packaging, the workflow copies the new GUI into a clean staging directory and runs `windeployqt --release --compiler-runtime --no-translations`. The result includes Qt/MinGW runtime dependencies, this guide, migration status, and build metadata. It creates `Proxmark3GUI-offline-windows-x64-GUI-only.zip` plus a SHA-256 file. No seller directory, client executable, firmware, imported dictionary, or user workspace is copied. The GUI cannot operate hardware without a separately supplied compatible client.
 
@@ -195,5 +207,7 @@ QtTest covers local input and resource logic. Compilation checks C++/Qt integrat
 ### 编译与验证范围
 
 Linux 和 Windows 编译命令见上面的 [Build and tests](#build-and-tests)。CI 使用 Ubuntu 22.04 / Qt 5 与 Windows x64 / Qt 5.15.2 / MinGW 8.1，自动发现 `tests/*/*.pro` 并运行 QtTest。Windows 通过 `windeployqt` 生成便携 GUI-only 包，包含 Qt/MinGW 运行依赖、说明文档、构建信息和 SHA-256；不包含客户端、固件、卖家文件或用户数据。
+
+Windows 下，每个测试工程分别编译后，在该构建目录根部查找 `tst_*.exe`，必须恰好找到一个。按上面的 PowerShell 示例，用调用运算符 `&` 和完整路径直接运行，并检查 `$LASTEXITCODE`；不依赖 qmake 生成的 shell 包装器查找程序。所有测试照常执行，Linux 仍使用 `make check`。
 
 QtTest 验证本地校验与资源逻辑，编译验证 C++/Qt 集成；二者都不能代替物理设备测试、外部二进制审计、杀毒软件认证或全系统零出网验证。仓库中存在 workflow 文件不代表远程 CI 已经成功运行。发布前应以实际 Windows 制品、客户端版本与硬件验证记录为准。构建及测试不会刷写设备固件。

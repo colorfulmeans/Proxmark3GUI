@@ -128,7 +128,12 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "qmake failed: $($project.Name)" }
               mingw32-make -j2
               if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $($project.Name)" }
-              mingw32-make check
+              $testExecutables = @(Get-ChildItem -LiteralPath $testBuild -File -Filter 'tst_*.exe')
+              if ($testExecutables.Count -ne 1) {
+                throw "Expected exactly one tst_*.exe in $testBuild; found $($testExecutables.Count)"
+              }
+              $testExecutable = $testExecutables[0].FullName
+              & $testExecutable
               if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($project.Name)" }
             } finally {
               Pop-Location
