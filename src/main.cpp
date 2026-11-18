@@ -1,4 +1,4 @@
-﻿#include "ui/mainwindow.h"
+#include "ui/mainwindow.h"
 
 #include <QApplication>
 #include <QSettings>
@@ -6,25 +6,27 @@
 #include <QMessageBox>
 #include <QTextCodec>
 #include <QDir>
+#include <QLocale>
+#include "common/apppaths.h"
+#include "common/offlinepolicy.h"
 
 int main(int argc, char *argv[])
 {
-    // A trick to handle non-ascii path
-    // The application cannot find the plugins when the path contains non ascii characters.
-    // However, the plugins will be load after creating MainWindow(or QApplication?).
-    // QDir will handle the path correctly.
-    QDir* pluginDir = new QDir;
-    if(pluginDir->cd("plugins")) // has plugins folder
-    {
-        qputenv("QT_PLUGIN_PATH", pluginDir->absolutePath().toLocal8Bit());
-    }
-    delete pluginDir;
-
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QTextCodec::setCodecForLocale(QTextCodec::codecForName("UTF-8"));
     QApplication a(argc, argv);
+    a.setOrganizationName("colorfulmeans");
+    a.setApplicationName("Proxmark3GUIOffline");
+    a.setApplicationVersion("0.3.0-offline-dev");
+    QString pathError;
+    if(!AppPaths::initialize(&pathError) || !QDir::setCurrent(AppPaths::workspaceDirectory()))
+    {
+        QMessageBox::critical(nullptr, "Local data directory", pathError.isEmpty()
+                              ? "Cannot enter the local workspace." : pathError);
+        return 1;
+    }
 
-    QSettings* settings = new QSettings("GUIsettings.ini", QSettings::IniFormat);
+    QSettings* settings = new QSettings(AppPaths::settingsFile(), QSettings::IniFormat);
     settings->setIniCodec("UTF-8");
     settings->beginGroup("language");
     QString languageFile = settings->value("extPath").toString();
@@ -33,22 +35,21 @@ int main(int argc, char *argv[])
     settings->beginGroup("UI");
     QString theme = settings->value("Theme_Name").toString();
     settings->endGroup();
-    if(languageName == "")
+    if(languageName.isEmpty())
     {
-        if(Util::chooseLanguage(settings))
-        {
-            settings->beginGroup("language");
-            languageName = settings->value("name").toString();
-            settings->endGroup();
-        }
-        else
-            languageName = "en_US";
+        languageName = QLocale::system().language() == QLocale::Chinese ? "zh_CN" : "en_US";
+        settings->setValue("language/name", languageName);
     }
     if(languageName == "(ext)")
     {
         settings->beginGroup("language");
         languageFile = settings->value("extPath").toString();
         settings->endGroup();
+        QString localTranslation;
+        if(OfflinePolicy::validateLocalFilePath(languageFile, &localTranslation))
+            languageFile = localTranslation;
+        else
+            languageFile = ":/i18n/en_US.qm";
     }
     else
         languageFile = ":/i18n/" + languageName + ".qm";

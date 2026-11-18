@@ -1,4 +1,26 @@
-# Proxmark3GUI
+# Proxmark3GUI — 离线分支
+
+本分支基于 [wh201906/Proxmark3GUI](https://github.com/wh201906/Proxmark3GUI) 的原生 Qt 界面，增加本地资源管理和明确的本地后端调用边界。无需卖家账号，不接入卖家服务或云端卡片分析，不包含卖家可执行文件。
+
+**当前状态：已实现源码改造，物理设备兼容性仍待验证。** Windows 工作流生成包含 Qt 运行依赖的 **GUI-only 便携包**，不包含 Proxmark3 客户端或固件。编译成功或单元测试通过，不等于某个设备、固件或 RRG 版本已经适配完成。
+
+本地 Linux / Qt 5.15.2 已完成 GUI 编译，四个 QtTest 工程合计 **196 项通过**。Windows 工作流尚未远程运行，其打包产物和 Windows 上的实际运行仍待验证。
+
+- [离线使用与编译说明（中英双语）](../../OFFLINE.md)
+- [功能迁移状态表](../../MIGRATION_STATUS.md)
+- [Windows Qt 5.15.2 与 Linux Qt 5 编译测试工作流](../../.github/workflows/build.yml)
+- [English](../../README.md)
+
+GUI 只接受经过审核的本地客户端命令子集。这不是操作系统级禁网沙箱，用户选择的原生客户端也必须来源可信。本分支没有宣称与卖家软件全部功能等价，也没有宣称某个当前 RRG 版本已验证适配。
+
+工作流配置为测试成功后生成 `Proxmark3GUI-offline-windows-x64-GUI-only.zip` 及 SHA-256 文件。使用前检查实际运行结果和提交号；存在工作流文件不代表远程构建已经成功。
+
+保留上游 [LGPL-2.1 许可证](../../LICENSE) 与原有署名。本分支与硬件卖家及 RfidResearchGroup 无隶属关系。
+
+## 上游历史说明
+
+下方保留原始 README，供了解项目历史和界面。其下载链接、下载量、附带客户端的发布说明、构建命令、截图和教程描述的是上游历史发布版本，不代表本分支的产物，也不覆盖 [OFFLINE.md](../../OFFLINE.md) 的说明。下载上游 release 不会获得本分支改动；旧教程中的部分环境脚本设置在此分支不可用。
+
 [![downloads](https://img.shields.io/github/downloads/wh201906/Proxmark3GUI/total?label=GitHub%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://github.com/wh201906/Proxmark3GUI/releases)  
 [![downloads](https://img.shields.io/sourceforge/dt/proxmark3gui.svg?label=SourceForge%E4%B8%8B%E8%BD%BD%E9%87%8F)](https://sourceforge.net/projects/proxmark3gui/)  
 

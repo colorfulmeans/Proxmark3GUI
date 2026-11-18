@@ -1,4 +1,5 @@
-﻿#include "mifare.h"
+#include "mifare.h"
+#include "common/localdictionary.h"
 #include <QJsonArray>
 
 const Mifare::CardType Mifare::card_mini =
@@ -128,7 +129,12 @@ QMap<QString, QString> Mifare::info(bool isRequiringOutput)
     return map;
 }
 
-void Mifare::chk()
+bool Mifare::supportsLocalDictionary() const
+{
+    return configMap.value("check").toMap().value("dictionary option").toString() == "-f";
+}
+
+void Mifare::chk(const QString& dictionaryFile)
 {
     QRegularExpressionMatch reMatch;
     QString result;
@@ -141,9 +147,20 @@ void Mifare::chk()
     QRegularExpression keyPattern = QRegularExpression(config["key pattern"].toString(), QRegularExpression::MultilineOption);
     cmd.replace("<card type>", config["card type"].toMap()[cardType.typeText].toString());
 
+    if(!dictionaryFile.isEmpty())
+    {
+        if(!supportsLocalDictionary())
+        {
+            emit util->operationBlocked(tr("This client profile has no verified local dictionary option."));
+            return;
+        }
+        cmd += " -f \"" + dictionaryFile + "\"";
+    }
+
     result = util->execCMDWithOutput(
                  cmd,
-                 Util::ReturnTrigger(1000 + cardType.sector_size * 200, {"No valid", keyPattern.pattern()}));
+                 Util::ReturnTrigger(dictionaryFile.isEmpty() ? 1000 + cardType.sector_size * 200 : 60000,
+                                     {"No valid", keyPattern.pattern()}));
     for(int i = 0; i < cardType.sector_size; i++)
     {
         reMatch = keyPattern.match(result, offset);
@@ -153,11 +170,13 @@ void Mifare::chk()
             data = reMatch.captured().toUpper();
             offset += data.length();
             QStringList cells = data.remove(" ").split("|");
-            if(!cells[keyAindex].contains(QRegularExpression("[^0-9a-fA-F]")))
+            if(keyAindex < 0 || keyBindex < 0 || cells.size() <= qMax(keyAindex, keyBindex))
+                continue;
+            if(QRegularExpression("^[0-9A-F]{12}$").match(cells[keyAindex]).hasMatch())
             {
                 keyAList->replace(i, cells[keyAindex]);
             }
-            if(!cells[keyBindex].contains(QRegularExpression("[^0-9a-fA-F]")))
+            if(QRegularExpression("^[0-9A-F]{12}$").match(cells[keyBindex]).hasMatch())
             {
                 keyBList->replace(i, cells[keyBindex]);
             }
@@ -1029,6 +1048,12 @@ void Mifare::setCardType(int type)
 
 bool Mifare::data_loadDataFile(const QString& filename)
 {
+    QString pathError;
+    if(!LocalDictionary::validateLocalPath(filename, nullptr, &pathError))
+    {
+        emit util->operationBlocked(pathError);
+        return false;
+    }
     QFile file(filename, this);
     if(file.open(QIODevice::ReadOnly))
     {
@@ -1076,6 +1101,12 @@ bool Mifare::data_loadDataFile(const QString& filename)
 
 bool Mifare::data_loadKeyFile(const QString& filename)
 {
+    QString pathError;
+    if(!LocalDictionary::validateLocalPath(filename, nullptr, &pathError))
+    {
+        emit util->operationBlocked(pathError);
+        return false;
+    }
     QFile file(filename, this);
     if(file.open(QIODevice::ReadOnly))
     {
@@ -1131,6 +1162,12 @@ QString Mifare::bin2text(const QByteArray& buff, int i, int length)
 
 bool Mifare::data_saveDataFile(const QString& filename, bool isBin)
 {
+    QString pathError;
+    if(!LocalDictionary::validateLocalPath(filename, nullptr, &pathError))
+    {
+        emit util->operationBlocked(pathError);
+        return false;
+    }
     QFile file(filename, this);
     if(file.open(QIODevice::WriteOnly))
     {
@@ -1175,6 +1212,12 @@ bool Mifare::data_saveDataFile(const QString& filename, bool isBin)
 
 bool Mifare::data_saveKeyFile(const QString& filename, bool isBin)
 {
+    QString pathError;
+    if(!LocalDictionary::validateLocalPath(filename, nullptr, &pathError))
+    {
+        emit util->operationBlocked(pathError);
+        return false;
+    }
     QFile file(filename, this);
     if(file.open(QIODevice::WriteOnly))
     {

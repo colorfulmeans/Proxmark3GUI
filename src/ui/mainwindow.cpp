@@ -1,8 +1,44 @@
-﻿#include "mainwindow.h"
+#include "mainwindow.h"
 #include "ui_mainwindow.h"
 
 #include <QJsonDocument>
 #include <QDirIterator>
+#include <QCryptographicHash>
+#include <QJsonParseError>
+#include <QSaveFile>
+#include <QToolBar>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
+#include <QPlainTextEdit>
+#include <QUuid>
+#include "common/apppaths.h"
+#include "common/offlinepolicy.h"
+#include "common/localdictionary.h"
+#include "ui/localresourcesdialog.h"
+
+namespace {
+QByteArray fileDigest(const QString& path, QString* error)
+{
+    QFile file(path);
+    if(!file.open(QIODevice::ReadOnly))
+    {
+        if(error) *error = file.errorString();
+        return QByteArray();
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if(!hash.addData(&file))
+    {
+        if(error) *error = QStringLiteral("Cannot read the complete client executable.");
+        return QByteArray();
+    }
+    return hash.result().toHex();
+}
+QString clientPinKey(const QString& path)
+{
+    return "Offline/clients/" + QString::fromLatin1(
+        QCryptographicHash::hash(path.toUtf8(), QCryptographicHash::Sha256).toHex());
+}
+}
 
 MainWindow::MainWindow(QWidget *parent):
     QMainWindow(parent)
@@ -10,9 +46,9 @@ MainWindow::MainWindow(QWidget *parent):
 {
     ui->setupUi(this);
     dockAllWindows = new QAction(tr("Dock all windows"), this);
-    myInfo = new QAction("wh201906", this);
-    currVersion = new QAction(tr("Ver: ") + QApplication::applicationVersion().section('.', 0, -2), this); // ignore the 4th version number
-    checkUpdate = new QAction(tr("Check Update"), this);
+    myInfo = new QAction(tr("About offline GUI"), this);
+    currVersion = new QAction(tr("Ver: ") + QApplication::applicationVersion(), this); // ignore the 4th version number
+    checkUpdate = new QAction(tr("Client details"), this);
     connect(dockAllWindows, &QAction::triggered, [ = ]()
     {
         for(int i = 0; i < dockList.size(); i++)
@@ -20,14 +56,17 @@ MainWindow::MainWindow(QWidget *parent):
     });
     connect(myInfo, &QAction::triggered, [ = ]()
     {
-        QDesktopServices::openUrl(QUrl("https://github.com/wh201906"));
+        QMessageBox::information(this, tr("About offline GUI"),
+            tr("Proxmark3GUI Offline\nBased on wh201906/Proxmark3GUI.\n"
+               "Local serial connections and local data tools. No account, update check or upload service.\n"
+               "Use a trusted local PM3 client; the GUI input policy is not an operating-system sandbox."));
     });
     connect(checkUpdate, &QAction::triggered, [ = ]()
     {
-        QDesktopServices::openUrl(QUrl("https://github.com/wh201906/Proxmark3GUI/releases"));
+        showClientDetails();
     });
 
-    settings = new QSettings("GUIsettings.ini", QSettings::IniFormat);
+    settings = new QSettings(AppPaths::settingsFile(), QSettings::IniFormat);
     settings->setIniCodec("UTF-8");
 
     pm3Thread = new QThread(this);
@@ -71,32 +110,55 @@ MainWindow::MainWindow(QWidget *parent):
 
 MainWindow::~MainWindow()
 {
-    delete ui;
-    emit killPM3();
-    pm3Thread->exit(0);
-    pm3Thread->wait(5000);
-    delete pm3;
+    if(pm3Thread->isRunning())
+    {
+        QMetaObject::invokeMethod(pm3, "killPM3", Qt::BlockingQueuedConnection);
+        pm3Thread->quit();
+        pm3Thread->wait();
+    }
     delete pm3Thread;
+    // Worker signals are queued while the GUI thread waits in this destructor.
+    // Do not rely on onPM3StateChanged(false) running during window teardown.
+    for(const QString& path : stagedDictionaryFiles)
+        QFile::remove(path);
+    stagedDictionaryFiles.clear();
+    delete clientWorkingDir;
+    delete settings;
+    delete ui;
 }
 
-void MainWindow::loadConfig()
+bool MainWindow::loadConfig()
 {
     QString filename = ui->Set_Client_configFileBox->currentData().toString();
     if(filename == "(ext)")
-        filename = ui->Set_Client_configPathEdit->text();
-    qDebug() << "config file:" << filename;
-    QFile configList(filename);
-    if(!configList.open(QFile::ReadOnly | QFile::Text))
     {
-        QMessageBox::information(this, tr("Info"), tr("Failed to load config file"));
-        return;
+        QString error;
+        if(!OfflinePolicy::validateLocalFilePath(ui->Set_Client_configPathEdit->text(), &filename, &error))
+        {
+            showOfflineError(error);
+            return false;
+        }
     }
-
-    QByteArray configData = configList.readAll();
-    QJsonDocument configJson(QJsonDocument::fromJson(configData));
-    mifare->setConfigMap(configJson.object()["mifare classic"].toObject().toVariantMap());
-    lf->setConfigMap(configJson.object()["lf"].toObject().toVariantMap());
-    t55xxTab->setConfigMap(configJson.object()["t55xx"].toObject().toVariantMap());
+    QFile file(filename);
+    if(!file.open(QIODevice::ReadOnly) || file.size() > 1024 * 1024)
+    {
+        showOfflineError(tr("Cannot read the selected local client configuration."));
+        return false;
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &parseError);
+    const QJsonObject object = document.object();
+    if(parseError.error != QJsonParseError::NoError || !document.isObject()
+       || !object.value("mifare classic").isObject() || !object.value("lf").isObject()
+       || !object.value("t55xx").isObject())
+    {
+        showOfflineError(tr("Invalid client configuration. Select a matching local profile."));
+        return false;
+    }
+    mifare->setConfigMap(object["mifare classic"].toObject().toVariantMap());
+    lf->setConfigMap(object["lf"].toObject().toVariantMap());
+    t55xxTab->setConfigMap(object["t55xx"].toObject().toVariantMap());
+    return true;
 }
 
 void MainWindow::initUI() // will be called by main.app
@@ -106,6 +168,158 @@ void MainWindow::initUI() // will be called by main.app
     signalInit();
     setState(false);
     dockInit();
+    initLocalTools();
+    setWindowTitle(tr("Proxmark3GUI Offline — local tools"));
+}
+
+void MainWindow::initLocalTools()
+{
+    QToolBar* tools = addToolBar(tr("Local tools"));
+    tools->setObjectName("localToolsBar");
+    tools->setMovable(false);
+    QAction* choose = tools->addAction(tr("Choose local client"));
+    choose->setObjectName("chooseLocalClientAction");
+    connect(choose, &QAction::triggered, this, &MainWindow::chooseLocalClient);
+    tools->addAction(checkUpdate);
+    QAction* dictionaries = tools->addAction(tr("Local dictionaries"));
+    dictionaries->setObjectName("localDictionariesAction");
+    connect(dictionaries, &QAction::triggered, this, &MainWindow::manageLocalDictionaries);
+    clearDictionaryAction = tools->addAction(tr("Clear dictionary selection"));
+    connect(clearDictionaryAction, &QAction::triggered, this, [this]() {
+        selectedDictionary.clear();
+        settings->remove("Offline/dictionary");
+        dictionaryAction->setText(tr("Dictionary: built-in defaults"));
+        ui->MF_Attack_chkButton->setToolTip(QString());
+        clearDictionaryAction->setEnabled(false);
+    });
+    QAction* log = tools->addAction(tr("Save session log"));
+    connect(log, &QAction::triggered, this, &MainWindow::saveSessionLog);
+    tools->addSeparator();
+    dictionaryAction = tools->addAction(tr("Dictionary: built-in defaults"));
+    dictionaryAction->setEnabled(false);
+    clearDictionaryAction->setEnabled(false);
+    selectedDictionary = settings->value("Offline/dictionary").toString();
+    if(!selectedDictionary.isEmpty())
+    {
+        LocalDictionary::ParseResult result;
+        if(LocalDictionary::readFile(selectedDictionary, &result))
+        {
+            dictionaryAction->setText(tr("Dictionary: %1").arg(QFileInfo(selectedDictionary).fileName()));
+            ui->MF_Attack_chkButton->setToolTip(tr("Use the selected local dictionary."));
+            clearDictionaryAction->setEnabled(true);
+        }
+        else
+            selectedDictionary.clear();
+    }
+    ui->PM3_pathBox->setEditable(false);
+    ui->PM3_pathBox->setToolTip(tr("Choose a trusted native client with the local client button."));
+}
+
+void MainWindow::chooseLocalClient()
+{
+    if(pm3state)
+    {
+        QMessageBox::information(this, tr("Local client"), tr("Disconnect before changing the client."));
+        return;
+    }
+#ifdef Q_OS_WIN
+    const QString filter = tr("Native executable (*.exe)");
+#else
+    const QString filter = tr("Native executable (*)");
+#endif
+    const QString selected = QFileDialog::getOpenFileName(this, tr("Choose a trusted local PM3 client"),
+        QApplication::applicationDirPath(), filter);
+    if(selected.isEmpty()) return;
+    QString path, error;
+    if(!OfflinePolicy::validateExecutablePath(selected, &path, &error))
+    {
+        QMessageBox::warning(this, tr("Local client"), error);
+        return;
+    }
+    const QByteArray digest = fileDigest(path, &error);
+    if(digest.isEmpty())
+    {
+        QMessageBox::warning(this, tr("Local client"), error);
+        return;
+    }
+    settings->setValue(clientPinKey(path), digest);
+    settings->sync();
+    addClientPath(path);
+    ui->statusbar->showMessage(tr("Local client selected. Its SHA-256 will be checked before each launch."), 8000);
+}
+
+void MainWindow::showClientDetails()
+{
+    QString path, error;
+    QByteArray digest;
+    if(OfflinePolicy::validateExecutablePath(ui->PM3_pathBox->currentText(), &path, &error))
+        digest = fileDigest(path, &error);
+    const QByteArray recorded = path.isEmpty() ? QByteArray() : settings->value(clientPinKey(path)).toByteArray();
+    QString details = tr("Client: %1\nSHA-256: %2\nRecorded SHA-256: %3\nProfile: %4\nData directory: %5\nClient workspace: %6\n\n")
+        .arg(path.isEmpty() ? tr("Not selected") : path,
+             QString::fromLatin1(digest), QString::fromLatin1(recorded),
+             ui->Set_Client_configFileBox->currentText(), AppPaths::dataDirectory(), AppPaths::workspaceDirectory());
+    details += tr("The checksum detects changes to the selected executable. It does not authenticate its origin or its DLLs.\n"
+                  "Use a reviewed RRG client and a matching firmware/profile. This GUI does not download or update them.\n"
+                  "Only local serial startup and reviewed commands are accepted. External clients remain separate programs; "
+                  "use operating-system outbound rules when enforcing network isolation.\n");
+    if(!error.isEmpty()) details += "\n" + error;
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Client details"));
+    dialog.resize(760, 420);
+    QVBoxLayout layout(&dialog);
+    QPlainTextEdit text;
+    text.setReadOnly(true);
+    text.setPlainText(details);
+    layout.addWidget(&text);
+    QDialogButtonBox buttons(QDialogButtonBox::Close);
+    connect(&buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout.addWidget(&buttons);
+    dialog.exec();
+}
+
+void MainWindow::manageLocalDictionaries()
+{
+    LocalResourcesDialog dialog(AppPaths::dataDirectory(), this);
+    connect(&dialog, &LocalResourcesDialog::dictionarySelected, this, [this](const QString& path) {
+        selectedDictionary = path;
+        settings->setValue("Offline/dictionary", path);
+        dictionaryAction->setText(tr("Dictionary: %1").arg(QFileInfo(path).fileName()));
+        ui->MF_Attack_chkButton->setToolTip(tr("Use the selected local dictionary."));
+        clearDictionaryAction->setEnabled(true);
+        ui->statusbar->showMessage(tr("Dictionary selected. Use the existing key-check button when connected."), 8000);
+    });
+    dialog.exec();
+}
+
+void MainWindow::saveSessionLog()
+{
+    const QString name = QDir(AppPaths::dataDirectory()).filePath("logs/session-"
+        + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss") + ".txt");
+    const QString selected = QFileDialog::getSaveFileName(this, tr("Save local session log"), name,
+                                                         tr("Text files (*.txt)"));
+    if(selected.isEmpty()) return;
+    QString path, error;
+    if(!LocalDictionary::validateLocalPath(selected, &path, &error))
+    {
+        showOfflineError(error);
+        return;
+    }
+    QSaveFile file(path);
+    file.setDirectWriteFallback(false);
+    const QByteArray contents = ui->Raw_outputEdit->toPlainText().toUtf8();
+    if(!file.open(QIODevice::WriteOnly) || file.write(contents) != contents.size() || !file.commit())
+    {
+        showOfflineError(tr("Cannot save the session log: %1").arg(file.errorString()));
+        return;
+    }
+    ui->statusbar->showMessage(tr("Session log saved locally."), 6000);
+}
+
+void MainWindow::showOfflineError(const QString& error)
+{
+    refreshOutput("\n[Offline GUI] " + error + "\n");
+    ui->statusbar->showMessage(error, 12000);
 }
 
 // ******************** basic functions ********************
@@ -124,7 +338,11 @@ void MainWindow::on_portSearchTimer_timeout()
             QString idString = (info.description() + info.serialNumber() + info.manufacturer()).toLower();
             QString portName = info.portName();
 
-            newPortList << portName;
+#ifdef Q_OS_WIN
+            newPortList << info.portName();
+#else
+            newPortList << info.systemLocation();
+#endif
             if(info.hasVendorIdentifier() && info.hasProductIdentifier())
             {
                 quint16 vid = info.vendorIdentifier();
@@ -157,117 +375,39 @@ void MainWindow::on_portSearchTimer_timeout()
 
 void MainWindow::on_PM3_connectButton_clicked()
 {
-    qDebug() << "Main:" << QThread::currentThread();
-
-    const QComboBox* portBox = ui->PM3_portBox;
-    QString port;
-    if(portBox->currentText() == portBox->itemText(portBox->currentIndex()))
-        // in the list
-        port = portBox->currentData().toString();
-    else
-        // not in the list
-        port = portBox->currentText();
-    qDebug() << "port:" << port;
-    QString startArgs = ui->Set_Client_startArgsEdit->text();
-    QString clientPath = ui->PM3_pathBox->currentText();
-    QFileInfo clientFile(clientPath);
-    bool clientExist = false;
-
-    QStringList extList = {""};
-#ifdef Q_OS_WIN
-    if(clientFile.suffix().isEmpty())
+    if(pm3state)
+        return;
+    const QComboBox* box = ui->PM3_portBox;
+    const QString port = box->currentText() == box->itemText(box->currentIndex())
+        ? box->currentData().toString() : box->currentText();
+    QString path, error;
+    QStringList arguments;
+    if(!OfflinePolicy::validateExecutablePath(ui->PM3_pathBox->currentText(), &path, &error)
+       || !OfflinePolicy::buildLaunchArguments(port, &arguments, &error))
     {
-        QString pathExt = QProcessEnvironment::systemEnvironment().value("pathext");
-        extList += pathExt.split(";", Qt::SkipEmptyParts);
-        if(extList.size() == 1)
-            extList += ".exe";
-    }
-#endif
-    for(const QString& ext : extList)
-    {
-        QFileInfo executable(clientFile.filePath() + ext);
-        if(executable.isFile())
-        {
-            clientExist = true;
-            break;
-        }
-    }
-
-    if(!clientExist)
-    {
-        QMessageBox::information(this, tr("Info"), tr("The client path is invalid"), QMessageBox::Ok);
+        QMessageBox::warning(this, tr("Local client"), error);
         return;
     }
-
-    // on RRG repo, if no port is specified, the client will search the available port
-    if(port == "" && startArgs.contains("<port>")) // has <port>, no port
+    const QByteArray expected = settings->value(clientPinKey(path)).toByteArray();
+    const QByteArray actual = fileDigest(path, &error);
+    if(expected.isEmpty() || actual.isEmpty() || actual != expected)
     {
-        QMessageBox::information(this, tr("Info"), tr("Plz choose a port first"), QMessageBox::Ok);
+        QMessageBox::warning(this, tr("Client file changed"),
+            tr("Choose the local client again to record its current SHA-256. "
+               "A checksum detects changes; it does not certify the source of an executable."));
         return;
     }
-
-    if(!startArgs.contains("<port>")) // no <port>
-        port = ""; // a symbol
-
-    QStringList args = startArgs.replace("<port>", port).split(' ');
-    addClientPath(clientPath);
-
-    QProcess envSetProcess;
-    QString envScriptPath = ui->Set_Client_envScriptEdit->text();
-    if(envScriptPath.contains("<client dir>"))
-        envScriptPath.replace("<client dir>", clientFile.absoluteDir().absolutePath());
-
-    QFileInfo envScript(envScriptPath);
-    if(envScript.exists())
+    if(!AppPaths::initialize(&error) || !loadConfig())
     {
-        qDebug() << envScript.absoluteFilePath();
-        // use the shell session to keep the environment then read it
-#ifdef Q_OS_WIN
-        // cmd /c "<path>">>nul && set
-        envSetProcess.start("cmd", {}, QProcess::Unbuffered | QProcess::ReadWrite | QProcess::Text);
-        envSetProcess.write(QString("\"" + envScript.absoluteFilePath() + "\">>nul\n").toLatin1());
-        envSetProcess.waitForReadyRead(10000);
-        envSetProcess.readAll();
-        envSetProcess.write("set\n");
-#else
-        // need implementation(or test if space works)
-        // sh -c '. "<path>">>/dev/null && env'
-        envSetProcess.start("sh -c \' . \"" + envScript.absoluteFilePath() + "\">>/dev/null && env");
-#endif
-        envSetProcess.waitForReadyRead(10000);
-        QString envSetResult = QString(envSetProcess.readAll());
-#if (QT_VERSION <= QT_VERSION_CHECK(5,14,0))
-        clientEnv = envSetResult.split("\n", QString::SkipEmptyParts);
-#else
-        clientEnv = envSetResult.split("\n", Qt::SkipEmptyParts);
-#endif
-        if(clientEnv.size() > 2) // the first element is "set" and the last element is the current path
-        {
-            clientEnv.removeFirst();
-            clientEnv.removeLast();
-            emit setProcEnv(&clientEnv);
-        }
-//      qDebug() << "Get Env List" << clientEnv;
+        if(!error.isEmpty()) showOfflineError(error);
+        return;
     }
-    else
-        clientEnv.clear();
-
-    clientWorkingDir->setPath(QApplication::applicationDirPath());
-    qDebug() << clientWorkingDir->absolutePath();
-    clientWorkingDir->mkpath(ui->Set_Client_workingDirEdit->text());
-    qDebug() << clientWorkingDir->absolutePath();
-    clientWorkingDir->cd(ui->Set_Client_workingDirEdit->text());
-    qDebug() << clientWorkingDir->absolutePath();
+    pinnedClientHash = expected;
+    clientWorkingDir->setPath(AppPaths::workspaceDirectory());
     emit setWorkingDir(clientWorkingDir->absolutePath());
-
-    loadConfig();
-    emit connectPM3(clientPath, args);
-    if(port != "" && !keepClientActive)
-        emit setSerialListener(port, true);
-    else if(!keepClientActive)
-        emit setSerialListener(false);
-
-    envSetProcess.kill();
+    emit connectPM3(path, arguments, expected);
+    if(!keepClientActive)
+        emit setSerialListener(arguments.first(), true);
 }
 
 void MainWindow::onPM3ErrorOccurred(QProcess::ProcessError error)
@@ -295,6 +435,9 @@ void MainWindow::onPM3StateChanged(bool st, const QString& info)
     else
     {
         portSearchTimer->start();
+        for(const QString& path : stagedDictionaryFiles)
+            QFile::remove(path);
+        stagedDictionaryFiles.clear();
         setStatusBar(PM3VersionBar, "");
         setStatusBar(connectStatusBar, tr("Not Connected"));
     }
@@ -316,20 +459,9 @@ void MainWindow::refreshOutput(const QString& output)
 
 void MainWindow::on_stopButton_clicked()
 {
-    if(!pm3state)
-        on_PM3_disconnectButton_clicked();
-    else
-    {
-        on_PM3_disconnectButton_clicked();
-        for(int i = 0; i < 10; i++)
-        {
-            util->delay(200);
-            if(!pm3state)
-                break;
-        }
-        emit reconnectPM3();
-        emit setSerialListener(!keepClientActive);
-    }
+    // A process stop is not a protocol-level cancellation. Reconnecting is an
+    // explicit user action so an interrupted operation cannot silently resume.
+    on_PM3_disconnectButton_clicked();
 }
 // *********************************************************
 
@@ -807,8 +939,39 @@ void MainWindow::on_MF_Attack_infoButton_clicked()
 
 void MainWindow::on_MF_Attack_chkButton_clicked()
 {
+    if(!pm3state) return;
+    QString dictionaryName;
+    if(!selectedDictionary.isEmpty())
+    {
+        if(!mifare->supportsLocalDictionary())
+        {
+            QMessageBox::information(this, tr("Local dictionary"),
+                tr("The selected profile has no verified dictionary option. "
+                   "Use the RRG v4.16717 profile with its matching client, or clear the dictionary selection."));
+            return;
+        }
+        LocalDictionary::ParseResult result;
+        QString error;
+        if(!LocalDictionary::readFile(selectedDictionary, &result, &error))
+        {
+            showOfflineError(error);
+            return;
+        }
+        // Keep the filename ASCII and pass it relative to the private workspace.
+        // This avoids putting user directory names into the client's command line.
+        dictionaryName = "gui-dictionary-" + QUuid::createUuid().toString(QUuid::WithoutBraces) + ".dic";
+        const QString staged = QDir(AppPaths::workspaceDirectory()).filePath(dictionaryName);
+        if(!LocalDictionary::writeFile(staged, result.keys, &error))
+        {
+            showOfflineError(error);
+            return;
+        }
+        // Keep the file until the process closes: a command can still be queued
+        // in the client's stdin after the GUI output collector times out.
+        stagedDictionaryFiles.append(staged);
+    }
     setState(false);
-    mifare->chk();
+    mifare->chk(dictionaryName);
     setState(true);
 }
 
@@ -1113,7 +1276,8 @@ void MainWindow::uiInit()
     setStatusBar(connectStatusBar, tr("Not Connected"));
     setStatusBar(programStatusBar, tr("Idle"));
     setStatusBar(PM3VersionBar, "");
-    stopButton->setText(tr("Stop"));
+    stopButton->setText(tr("Stop client"));
+    stopButton->setToolTip(tr("Stops the client process. Reconnect explicitly after an interrupted operation."));
     ui->statusbar->addPermanentWidget(PM3VersionBar, 1);
     ui->statusbar->addPermanentWidget(connectStatusBar, 1);
     ui->statusbar->addPermanentWidget(programStatusBar, 1);
@@ -1163,10 +1327,11 @@ void MainWindow::uiInit()
 
     loadClientPathList();
 
-    ui->Set_Client_GUIWorkingDirLabel->setText(QDir::currentPath());
+    ui->Set_Client_GUIWorkingDirLabel->setText(AppPaths::dataDirectory());
 
     settings->beginGroup("Client_Args");
-    ui->Set_Client_startArgsEdit->setText(settings->value("args", "<port> -f").toString());
+    ui->Set_Client_startArgsEdit->setText("<local serial port> -f");
+    ui->Set_Client_startArgsEdit->setReadOnly(true);
     settings->endGroup();
 
     settings->beginGroup("Client_forceButtonsEnabled");
@@ -1202,8 +1367,10 @@ void MainWindow::uiInit()
 
     int configId = -1;
     settings->beginGroup("Client_Env");
-    ui->Set_Client_envScriptEdit->setText(settings->value("scriptPath").toString());
-    ui->Set_Client_workingDirEdit->setText(settings->value("workingDir", "../data").toString());
+    ui->Set_Client_envScriptEdit->clear();
+    ui->Set_Client_envScriptEdit->setEnabled(false);
+    ui->Set_Client_workingDirEdit->setText(AppPaths::workspaceDirectory());
+    ui->Set_Client_workingDirEdit->setReadOnly(true);
     configId = ui->Set_Client_configFileBox->findData(settings->value("configFile"));
     ui->Set_Client_configPathEdit->setText(settings->value("extConfigFilePath", "config.json").toString());
     settings->endGroup();
@@ -1282,7 +1449,8 @@ void MainWindow::signalInit()
     connect(pm3, &PM3Process::errorOccurred, this, &MainWindow::onPM3ErrorOccurred);
     connect(pm3, &PM3Process::HWConnectFailed, this, &MainWindow::onPM3HWConnectFailed);
     connect(this, &MainWindow::killPM3, pm3, &PM3Process::killPM3);
-    connect(this, &MainWindow::setProcEnv, pm3, &PM3Process::setProcEnv);
+    connect(pm3, &PM3Process::operationBlocked, this, &MainWindow::showOfflineError);
+    connect(util, &Util::operationBlocked, this, &MainWindow::showOfflineError);
     connect(this, &MainWindow::setWorkingDir, pm3, &PM3Process::setWorkingDir);
     connect(this, QOverload<bool>::of(&MainWindow::setSerialListener), pm3, QOverload<bool>::of(&PM3Process::setSerialListener));
     connect(this, QOverload<const QString&, bool>::of(&MainWindow::setSerialListener), pm3, QOverload<const QString&, bool>::of(&PM3Process::setSerialListener));
@@ -1370,7 +1538,7 @@ void MainWindow::setState(bool st)
     {
         setStatusBar(programStatusBar, tr("Idle"));
     }
-    setButtonsEnabled(st || keepButtonsEnabled);
+    setButtonsEnabled((st && pm3state) || keepButtonsEnabled);
 }
 
 void MainWindow::setButtonsEnabled(bool st)

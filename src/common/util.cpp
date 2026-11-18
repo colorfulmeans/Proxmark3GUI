@@ -1,4 +1,6 @@
-﻿#include "util.h"
+#include "util.h"
+#include "offlinepolicy.h"
+#include <QMessageBox>
 
 Util::ClientType Util::clientType = CLIENTTYPE_OFFICIAL;
 
@@ -11,7 +13,8 @@ Util::Util(QObject *parent) : QObject(parent)
 {
     isRequiringOutput = false;
     requiredOutput = new QString();
-    timeStamp = QTime::currentTime();
+    isRunning = false;
+    outputTimer.start();
     qRegisterMetaType<Util::ClientType>("Util::ClientType");
 }
 
@@ -22,47 +25,48 @@ void Util::processOutput(const QString& output)
     if(isRequiringOutput)
     {
         requiredOutput->append(output);
-        timeStamp = QTime::currentTime();
+        outputTimer.restart();
     }
     emit refreshOutput(output);
 }
 
 void Util::execCMD(const QString& cmd)
 {
-    qDebug() << "executing: " << cmd;
+    QString error;
+    if(!OfflinePolicy::validateCommand(cmd, &error))
+    {
+        emit operationBlocked(error);
+        return;
+    }
     if(isRunning)
         emit write(cmd + "\n");
 }
 
 QString Util::execCMDWithOutput(const QString& cmd, ReturnTrigger trigger, bool rawOutput)
 {
-    // if the trigger is empty, this function will wait trigger.waitTime then return all outputs during the wait time.
-    // otherwise, this function will return empty string if no trigger is detected, or return outputs if any trigger is detected.
-    // the waitTime will be refreshed if the client have new outputs
+    QString error;
+    if(!OfflinePolicy::validateCommand(cmd, &error))
+    {
+        emit operationBlocked(error);
+        return QString();
+    }
+    if(!isRunning || isRequiringOutput)
+        return QString();
     bool isResultFound = false;
     QRegularExpression re;
     re.setPatternOptions(QRegularExpression::DotMatchesEverythingOption);
-
-    if(!isRunning)
-        return "";
-    QTime currTime = QTime::currentTime();
-    QTime targetTime = QTime::currentTime().addMSecs(trigger.waitTime);
     isRequiringOutput = true;
     requiredOutput->clear();
-    execCMD(cmd);
-    while(QTime::currentTime() < targetTime)
+    outputTimer.restart();
+    emit write(cmd + "\n");
+    while(isRunning && outputTimer.elapsed() < qint64(trigger.waitTime))
     {
-        if(!isRunning)
-            break;
-        QApplication::processEvents();
-//        qDebug() << "currOutput:" << *requiredOutput;
-        for(QString otpt : trigger.expectedOutputs)
+        for(const QString& expected : trigger.expectedOutputs)
         {
-            re.setPattern(otpt);
-            isResultFound = re.match(*requiredOutput).hasMatch();
-            if(isResultFound)
+            re.setPattern(expected);
+            if(re.match(*requiredOutput).hasMatch())
             {
-                qDebug() << "output Matched: " << *requiredOutput;
+                isResultFound = true;
                 break;
             }
         }
@@ -71,27 +75,19 @@ QString Util::execCMDWithOutput(const QString& cmd, ReturnTrigger trigger, bool 
             delay(200);
             break;
         }
-        if(timeStamp > currTime) //has new output
-        {
-            currTime = timeStamp;
-            targetTime = timeStamp.addMSecs(trigger.waitTime);
-        }
+        // Wait for events without spinning a full CPU core. Monotonic elapsed
+        // time also avoids the previous midnight rollover problem.
+        delay(20);
     }
     isRequiringOutput = false;
-
-    // For functions without expected outputs in the return trigger, the result is the raw output.
-    // For functions with expected outputs in the return trigger,
-    // if rawOutput=true, the result is the raw output,
-    // otherwise, if the raw output contains one of the expected outputs, the result is the raw output,
-    // otherwise, the result is empty(as a failed flag).
-    return (trigger.expectedOutputs.isEmpty() || isResultFound || rawOutput ? *requiredOutput : "");
+    return (trigger.expectedOutputs.isEmpty() || isResultFound || rawOutput) ? *requiredOutput : QString();
 }
 
 void Util::delay(unsigned int msec)
 {
-    QTime timer = QTime::currentTime().addMSecs(msec);
-    while(QTime::currentTime() < timer)
-        QApplication::processEvents(QEventLoop::AllEvents, 100);
+    QEventLoop loop;
+    QTimer::singleShot(int(msec), &loop, &QEventLoop::quit);
+    loop.exec(QEventLoop::AllEvents);
 }
 
 Util::ClientType Util::getClientType()
@@ -132,8 +128,15 @@ bool Util::chooseLanguage(QSettings* guiSettings, QMainWindow* window)
         if(extPath.isEmpty())
             return false;
 
+        QString localTranslation, error;
+        if(!OfflinePolicy::validateLocalFilePath(extPath, &localTranslation, &error))
+        {
+            QMessageBox::warning(window, tr("Local translation"), error);
+            return false;
+        }
+
         guiSettings->beginGroup("language");
-        guiSettings->setValue("extPath", extPath);
+        guiSettings->setValue("extPath", localTranslation);
         guiSettings->endGroup();
     }
 

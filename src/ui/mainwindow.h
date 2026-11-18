@@ -15,7 +15,6 @@
 #include <QtSerialPort/QSerialPort>
 #include <QMimeData>
 #include <QAction>
-#include <QDesktopServices>
 #include <QGroupBox>
 #include <QSizePolicy>
 #include <QSettings>
@@ -62,6 +61,7 @@ public slots:
     void on_MF_keyWidget_resized(QObject *obj_addr, QEvent &event);
     void onPM3ErrorOccurred(QProcess::ProcessError error);
     void onPM3HWConnectFailed();
+    void showOfflineError(const QString& error);
 private slots:
 
     void on_PM3_connectButton_clicked();
@@ -244,8 +244,8 @@ private:
 
     PM3Process* pm3;
     bool pm3state;
-    bool keepButtonsEnabled;
-    bool keepClientActive;
+    bool keepButtonsEnabled = false;
+    bool keepClientActive = true;
     QThread* pm3Thread;
     QTimer* portSearchTimer;
     QStringList portList;
@@ -271,16 +271,25 @@ private:
     void loadClientPathList();
     void saveClientPathList();
     void dockInit();
-    void loadConfig();
+    bool loadConfig();
+    void initLocalTools();
+    void chooseLocalClient();
+    void showClientDetails();
+    void manageLocalDictionaries();
+    void saveSessionLog();
+    QByteArray pinnedClientHash;
+    QString selectedDictionary;
+    QStringList stagedDictionaryFiles;
+    QAction* dictionaryAction = nullptr;
+    QAction* clearDictionaryAction = nullptr;
 protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
 signals:
-    void connectPM3(const QString& path, const QStringList args);
+    void connectPM3(const QString& path, const QStringList args, const QByteArray& expectedHash);
     void reconnectPM3();
     void killPM3();
     void setSerialListener(bool state);
     void setSerialListener(const QString& name, bool state);
-    void setProcEnv(const QStringList *env);
     void setWorkingDir(const QString& dir);
 };
 #endif // MAINWINDOW_H

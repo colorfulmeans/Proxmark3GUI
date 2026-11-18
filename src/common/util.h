@@ -1,4 +1,4 @@
-﻿#ifndef UTIL_H
+#ifndef UTIL_H
 #define UTIL_H
 
 #include <QObject>
@@ -6,7 +6,8 @@
 #include <QDebug>
 #include <QThread>
 #include <QApplication>
-#include <QTime>
+#include <QElapsedTimer>
+#include <QEventLoop>
 #include <QTimer>
 #include <QMetaType>
 #include <QRegularExpression>
@@ -71,11 +72,12 @@ private:
     bool isRequiringOutput;
     bool isRunning;
     QString* requiredOutput;
-    QTime timeStamp;
+    QElapsedTimer outputTimer;
     static ClientType clientType;
     static Ui::MainWindow *ui;
 signals:
     void refreshOutput(const QString& output);
+    void operationBlocked(const QString& error);
     void write(QString data); // connected to PM3Process::write(QString data);
 };
 

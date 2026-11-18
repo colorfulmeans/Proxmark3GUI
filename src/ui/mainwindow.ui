@@ -2692,7 +2692,7 @@ or the communication between a tag and a reader.</string>
                  <item>
                   <widget class="QLabel" name="label_65">
                    <property name="text">
-                    <string>GUI working directory:</string>
+                    <string>Local application data:</string>
                    </property>
                   </widget>
                  </item>
@@ -2713,7 +2713,7 @@ or the communication between a tag and a reader.</string>
                  <item>
                   <widget class="QLabel" name="label_11">
                    <property name="text">
-                    <string>Preload script path(Reconnect to apply):</string>
+                    <string>Preload scripts: disabled in this offline build</string>
                    </property>
                   </widget>
                  </item>
@@ -2727,8 +2727,7 @@ or the communication between a tag and a reader.</string>
                  <item>
                   <widget class="QLabel" name="label_13">
                    <property name="text">
-                    <string>If the client requires some enviroment variables, you can make a script file(*.bat on Windows or *.sh on Linux) to configure them, then put the path of the script there.
-The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quot;Client Path&quot;</string>
+                    <string>The native client is launched directly. No shell or environment script is executed.</string>
                    </property>
                    <property name="wordWrap">
                     <bool>true</bool>
@@ -2745,7 +2744,7 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                  <item>
                   <widget class="QLabel" name="label_19">
                    <property name="text">
-                    <string>Client working directory(Reconnect to apply):</string>
+                    <string>Local client workspace:</string>
                    </property>
                   </widget>
                  </item>
@@ -2759,7 +2758,7 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                  <item>
                   <widget class="QLabel" name="label_20">
                    <property name="text">
-                    <string>On Windows, the client working directory should not be identical to the path of GUI, otherwise the client will use the wrong .dll file.</string>
+                    <string>User data is kept outside the application and source repository.</string>
                    </property>
                    <property name="wordWrap">
                     <bool>true</bool>
@@ -2776,7 +2775,7 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                  <item>
                   <widget class="QLabel" name="label_12">
                    <property name="text">
-                    <string>Start arguments(Reconnect to apply):</string>
+                    <string>Fixed local startup arguments:</string>
                    </property>
                   </widget>
                  </item>
@@ -2790,7 +2789,7 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                  <item>
                   <widget class="QLabel" name="label_14">
                    <property name="text">
-                    <string>-f is necessary because the GUI need to handle the output in time. In some cases, the arguments should be set to &quot;-p /dev/&lt;port&gt; -f&quot; or &quot;-p &lt;port&gt; -f&quot;.</string>
+                    <string>A local serial port and flushed output are used. Extra startup commands and scripts are disabled.</string>
                    </property>
                    <property name="wordWrap">
                     <bool>true</bool>
@@ -3206,10 +3205,10 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                    </sizepolicy>
                   </property>
                   <property name="text">
-                   <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;a href=&quot;https://github.com/wh201906/Proxmark3GUI/releases/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/wh201906/Proxmark3GUI/releases/&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                   <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/wh201906/Proxmark3GUI/releases/&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                   </property>
                   <property name="openExternalLinks">
-                   <bool>true</bool>
+                   <bool>false</bool>
                   </property>
                   <property name="textInteractionFlags">
                    <set>Qt::TextBrowserInteraction</set>
@@ -3236,10 +3235,10 @@ The &quot;&lt;client dir&gt;&quot; will be replaced by the directory of the &quo
                    </sizepolicy>
                   </property>
                   <property name="text">
-                   <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;a href=&quot;https://github.com/wh201906/Proxmark3GUI/issues/&quot;&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/wh201906/Proxmark3GUI/issues/&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+                   <string notr="true">&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; text-decoration: underline; color:#0000ff;&quot;&gt;https://github.com/wh201906/Proxmark3GUI/issues/&lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
                   </property>
                   <property name="openExternalLinks">
-                   <bool>true</bool>
+                   <bool>false</bool>
                   </property>
                   <property name="textInteractionFlags">
                    <set>Qt::TextBrowserInteraction</set>

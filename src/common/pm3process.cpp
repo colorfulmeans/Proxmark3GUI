@@ -1,93 +1,130 @@
-﻿#include "pm3process.h"
+#include "pm3process.h"
+#include "offlinepolicy.h"
+#include "localdictionary.h"
 
-PM3Process::PM3Process(QThread* thread, QObject* parent): QProcess(parent)
+#include <QCryptographicHash>
+#include <QFile>
+#include <QDir>
+#include <QElapsedTimer>
+
+PM3Process::PM3Process(QThread* thread, QObject* parent): QProcess(parent), serialListener(new QTimer(this))
 {
-    moveToThread(thread);
-    setProcessChannelMode(PM3Process::MergedChannels);
-    isRequiringOutput = false;
-    requiredOutput = new QString();
-    serialListener = new QTimer(); // if using new QTimer(this), the debug output will show "Cannot create children for a parent that is in a different thread."
-    serialListener->moveToThread(this->thread());// I've tried many ways to creat a QTimer instance, but all of the instances are in the main thread(UI thread), so I have to move it manually
+    setProcessChannelMode(QProcess::MergedChannels);
     serialListener->setInterval(1000);
     serialListener->setTimerType(Qt::VeryCoarseTimer);
     connect(serialListener, &QTimer::timeout, this, &PM3Process::onTimeout);
-    connect(this, &PM3Process::readyRead, this, &PM3Process::onReadyRead);
-    portInfo = nullptr;
-
+    connect(this, &QProcess::readyRead, this, &PM3Process::onReadyRead);
+    connect(this, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished), this,
+            [this](int, QProcess::ExitStatus) {
+        onReadyRead();
+        serialListener->stop();
+        setRequiringOutput(false);
+        emit PM3StatedChanged(false);
+    });
     qRegisterMetaType<QProcess::ProcessError>("QProcess::ProcessError");
+    if(thread) moveToThread(thread);
 }
 
-void PM3Process::connectPM3(const QString& path, const QStringList args)
+PM3Process::~PM3Process()
 {
-    QString result;
-    Util::ClientType clientType;
-    setRequiringOutput(true);
-	QRegularExpression osPattern("(os:\\s+|OS\\.+\\s+)");
-
-    // stash for reconnect
-    currPath = path;
-    currArgs = args;
-
-    // using "-f" option to make the client output flushed after every print.
-    // single '\r' might appear. Don't use QProcess::Text there or '\r' is ignored.
-    start(path, args, QProcess::Unbuffered | QProcess::ReadWrite);
-    if(waitForStarted(10000))
+    if(state() != QProcess::NotRunning)
     {
-        waitForReadyRead(10000);
-        setRequiringOutput(false);
-        result = *requiredOutput;
-        if(result.contains("[=]"))
-        {
-            clientType = Util::CLIENTTYPE_ICEMAN;
-            setRequiringOutput(true);
-            write("hw version\n");
-            for(int i = 0; i < 50; i++)
-            {
-                waitForReadyRead(200);
-                result += *requiredOutput;
-                // if(result.contains("os: "))
-                if(osPattern.match(result).hasMatch())
-                    break;
-            }
-            setRequiringOutput(false);
-        }
-        else
-        {
-            clientType = Util::CLIENTTYPE_OFFICIAL;
-        }
-        // if(result.contains("os: ")) // make sure the PM3 is connected
-		if(osPattern.match(result).hasMatch())
-        {
-            emit changeClientType(clientType);
-            // result = result.mid(result.indexOf("os: "));
-			QRegularExpressionMatch osMatch = osPattern.match(result);
-			result = result.mid(osMatch.capturedStart());
-            result = result.left(result.indexOf("\n"));
-            // result = result.mid(4, result.indexOf(" ", 4) - 4);
-			result = result.mid(osMatch.capturedLength(), result.indexOf(" ", osMatch.capturedLength()) - osMatch.capturedLength());
-            emit PM3StatedChanged(true, result);
-        }
-        else
-        {
-            qDebug() << "unexpected output:" << (result.isEmpty() ? "(empty)" : result);
-            emit HWConnectFailed();
-            kill();
-        }
+        kill();
+        waitForFinished(2000);
     }
+}
 
+void PM3Process::connectPM3(const QString& path, const QStringList args, const QByteArray& expectedHash)
+{
+    if(state() != QProcess::NotRunning)
+    {
+        emit operationBlocked(tr("The client is already running."));
+        return;
+    }
+    QString canonicalPath, error;
+    if(!OfflinePolicy::validateExecutablePath(path, &canonicalPath, &error)
+       || !OfflinePolicy::validateLaunchArguments(args, &error))
+    {
+        emit operationBlocked(error);
+        emit PM3StatedChanged(false);
+        return;
+    }
+    QFile client(canonicalPath);
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if(expectedHash.size() != 64 || !client.open(QIODevice::ReadOnly) || !hash.addData(&client)
+       || hash.result().toHex() != expectedHash)
+    {
+        emit operationBlocked(tr("The client checksum does not match the explicitly selected file. Choose the client again."));
+        emit PM3StatedChanged(false);
+        return;
+    }
+    client.close();
+    if(!LocalDictionary::validateLocalPath(workingDirectory(), nullptr, &error)
+       || !QDir(workingDirectory()).exists())
+    {
+        emit operationBlocked(tr("The local client workspace is unavailable: %1").arg(error));
+        emit PM3StatedChanged(false);
+        return;
+    }
+    currPath = canonicalPath;
+    currArgs = args;
+    currHash = expectedHash;
+    outputDecoder.reset(QTextCodec::codecForName("UTF-8")->makeDecoder());
+    setRequiringOutput(true);
+    start(canonicalPath, args, QProcess::Unbuffered | QProcess::ReadWrite);
+    if(!waitForStarted(10000))
+    {
+        setRequiringOutput(false);
+        emit PM3StatedChanged(false);
+        return;
+    }
+    const QRegularExpression osPattern("(?:os:[ \\t]+|OS\\.+[ \\t]+)([^\\r\\n]+)\\r?\\n");
+    QElapsedTimer handshake;
+    handshake.start();
+    bool requestedVersion = false;
+    QString result;
+    while(state() != QProcess::NotRunning && handshake.elapsed() < 10000)
+    {
+        result = requiredOutput;
+        if(osPattern.match(result).hasMatch()) break;
+        // A pipe can split even the three-byte [=] banner. Accumulate until a
+        // complete marker/line exists instead of classifying the first chunk.
+        if(!requestedVersion && result.contains("[=]"))
+        {
+            requestedVersion = true;
+            write("hw version\n");
+        }
+        const qint64 remaining = 10000 - handshake.elapsed();
+        if(remaining <= 0) break;
+        waitForReadyRead(int(qMin<qint64>(200, remaining)));
+    }
+    result = requiredOutput;
+    const Util::ClientType type = result.contains("[=]") ? Util::CLIENTTYPE_ICEMAN : Util::CLIENTTYPE_OFFICIAL;
+    const QRegularExpressionMatch match = osPattern.match(result);
     setRequiringOutput(false);
+    if(match.hasMatch() && state() != QProcess::NotRunning)
+    {
+        emit changeClientType(type);
+        const QString info = match.captured(1).trimmed();
+        emit PM3StatedChanged(true, info);
+    }
+    else
+    {
+        emit HWConnectFailed();
+        killPM3();
+    }
 }
 
 void PM3Process::reconnectPM3()
 {
-    connectPM3(currPath, currArgs);
+    // Reapply path, argument and digest checks on every launch.
+    connectPM3(currPath, currArgs, currHash);
 }
 
 void PM3Process::setRequiringOutput(bool st)
 {
     isRequiringOutput = st;
-    if(isRequiringOutput)
-        requiredOutput->clear();
+    if(st) requiredOutput.clear();
 }
 
 bool PM3Process::waitForReadyRead(int msecs)
@@ -95,42 +132,35 @@ bool PM3Process::waitForReadyRead(int msecs)
     return QProcess::waitForReadyRead(msecs);
 }
 
-void PM3Process::setSerialListener(const QString& name, bool state)
+void PM3Process::setSerialListener(const QString& name, bool enabled)
 {
-    if(state)
+    if(enabled && state() != QProcess::NotRunning)
     {
-        currPort = name;
-        portInfo = new QSerialPortInfo(name);
+        QString error, normalizedPort;
+        if(!OfflinePolicy::validateSerialPort(name, &normalizedPort, &error))
+        {
+            emit operationBlocked(error);
+            return;
+        }
+        currPort = normalizedPort;
         serialListener->start();
-        qDebug() << serialListener->thread();
     }
     else
-    {
         serialListener->stop();
-        if(portInfo != nullptr)
-        {
-            delete portInfo;
-            portInfo = nullptr;
-        }
-    }
 }
 
-void PM3Process::setSerialListener(bool state)
+void PM3Process::setSerialListener(bool enabled)
 {
-    setSerialListener(currPort, state);
+    setSerialListener(currPort, enabled);
 }
 
-void PM3Process::onTimeout() //when the proxmark3 client is unexpectedly terminated or the PM3 hardware is removed, the isBusy() will return false(only tested on Windows);
+void PM3Process::onTimeout()
 {
-//    isBusy() is a deprecated function because it will block the serial port when the port is not in use.
-//    However, the PM3 client is supposed to use the target serial port exclusively, so it should be fine
-//    isBusy() will always return false on Raspbian, in this case, check "Keep the client active" in the Settings panel.
-//
-//    qDebug()<<portInfo->isBusy();
-    if(!portInfo->isBusy())
-    {
-        killPM3();
-    }
+    bool present = false;
+    for(const QSerialPortInfo& info : QSerialPortInfo::availablePorts())
+        if(info.portName() == currPort || info.systemLocation() == currPort)
+            present = true;
+    if(!present) killPM3();
 }
 
 void PM3Process::testThread()
@@ -138,40 +168,50 @@ void PM3Process::testThread()
     qDebug() << "PM3:" << QThread::currentThread();
 }
 
-qint64 PM3Process::write(QString data)
+qint64 PM3Process::write(QString frame)
 {
-    return QProcess::write(data.toLatin1());
+    QString command, error;
+    if(!OfflinePolicy::normalizeCommandFrame(frame, &command, &error))
+    {
+        emit operationBlocked(error);
+        return -1;
+    }
+    if(state() != QProcess::Running)
+    {
+        emit operationBlocked(tr("The local client is not running."));
+        return -1;
+    }
+    return QProcess::write((command + "\n").toUtf8());
 }
 
 void PM3Process::onReadyRead()
 {
-    QString out = readAll();
-    if(isRequiringOutput)
-        requiredOutput->append(out);
-    if(out != "")
-    {
-//        qDebug() << "PM3Process::onReadyRead:" << out;
-        emit newOutput(out);
-
-    }
-}
-
-void PM3Process::setProcEnv(const QStringList* env)
-{
-//    qDebug() << "passed Env List" << *env;
-    this->setEnvironment(*env);
-    //    qDebug() << "final Env List" << processEnvironment().toStringList();
+    const QByteArray bytes = readAll();
+    const QString out = outputDecoder ? outputDecoder->toUnicode(bytes) : QString::fromUtf8(bytes);
+    if(isRequiringOutput) requiredOutput.append(out);
+    if(!out.isEmpty()) emit newOutput(out);
 }
 
 void PM3Process::setWorkingDir(const QString& dir)
 {
-    // the working directory cannot be the default, or the client will failed to load the dll
-    this->setWorkingDirectory(dir);
+    QString path, error;
+    if(!LocalDictionary::validateLocalPath(dir, &path, &error) || !QDir(path).exists())
+    {
+        setWorkingDirectory(QString());
+        emit operationBlocked(tr("Invalid local workspace: %1").arg(error));
+        return;
+    }
+    setWorkingDirectory(path);
 }
 
 void PM3Process::killPM3()
 {
-    kill();
+    serialListener->stop();
+    if(state() != QProcess::NotRunning)
+    {
+        kill();
+        waitForFinished(3000);
+    }
+    setRequiringOutput(false);
     emit PM3StatedChanged(false);
-    setSerialListener(false);
 }

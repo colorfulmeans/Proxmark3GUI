@@ -1,0 +1,198 @@
+name: Build offline GUI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux / Qt 5 / tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential qtbase5-dev qtbase5-dev-tools qt5-qmake \
+            qttools5-dev-tools libqt5serialport5-dev
+          qmake -v
+
+      - name: Build GUI
+        run: |
+          mkdir -p build-gui
+          cd build-gui
+          qmake ../src/Proxmark3GUI.pro CONFIG+=release CONFIG-=debug
+          make -j2
+
+      - name: Build and run QtTest projects
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          projects=("$GITHUB_WORKSPACE"/tests/*/*.pro)
+          if [ "${#projects[@]}" -eq 0 ]; then
+            echo "No QtTest projects found in tests/*/*.pro" >&2
+            exit 1
+          fi
+          for project in "${projects[@]}"; do
+            name="$(basename "$project" .pro)"
+            test_build="$GITHUB_WORKSPACE/build-tests/$name"
+            mkdir -p "$test_build"
+            (
+              cd "$test_build"
+              qmake "$project" CONFIG+=release CONFIG-=debug
+              make -j2
+              make check
+            )
+          done
+
+  windows:
+    name: Windows x64 / Qt 5.15.2 / GUI-only portable
+    runs-on: windows-2022
+    timeout-minutes: 35
+    env:
+      QT_QPA_PLATFORM: offscreen
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Qt and matching MinGW toolchain
+        uses: jurplel/install-qt-action@12aa0336e1e410b3c6dff5e0722547f7a37e8c60 # v4.2.1
+        with:
+          version: '5.15.2'
+          host: windows
+          target: desktop
+          arch: win64_mingw81
+          tools: 'tools_mingw,qt.tools.win64_mingw810'
+          dir: '${{ runner.temp }}'
+          aqtversion: '==3.3.0'
+          cache: true
+
+      - name: Check manual firewall script syntax without executing it
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Join-Path $env:GITHUB_WORKSPACE 'scripts/Set-OfflineFirewall.ps1'),
+            [ref] $tokens, [ref] $parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+
+      - name: Build GUI
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force build-gui | Out-Null
+          Push-Location build-gui
+          try {
+            qmake ../src/Proxmark3GUI.pro CONFIG+=release CONFIG-=debug CONFIG-=debug_and_release
+            if ($LASTEXITCODE -ne 0) { throw 'GUI qmake failed' }
+            mingw32-make -j2
+            if ($LASTEXITCODE -ne 0) { throw 'GUI compilation failed' }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Build and run QtTest projects
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $projects = @(Get-ChildItem tests -Directory | ForEach-Object {
+            Get-ChildItem $_.FullName -File -Filter '*.pro'
+          })
+          if ($projects.Count -eq 0) { throw 'No QtTest projects found in tests/*/*.pro' }
+          foreach ($project in $projects) {
+            $testBuild = Join-Path $env:GITHUB_WORKSPACE "build-tests/$($project.BaseName)"
+            New-Item -ItemType Directory -Force $testBuild | Out-Null
+            Push-Location $testBuild
+            try {
+              qmake $project.FullName CONFIG+=release CONFIG-=debug CONFIG-=debug_and_release
+              if ($LASTEXITCODE -ne 0) { throw "qmake failed: $($project.Name)" }
+              mingw32-make -j2
+              if ($LASTEXITCODE -ne 0) { throw "Compilation failed: $($project.Name)" }
+              mingw32-make check
+              if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($project.Name)" }
+            } finally {
+              Pop-Location
+            }
+          }
+
+      - name: Package GUI and Qt runtime only
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $portable = Join-Path $env:GITHUB_WORKSPACE 'portable/Proxmark3GUI-offline-gui-only'
+          New-Item -ItemType Directory -Force $portable | Out-Null
+          Copy-Item build-gui/Proxmark3GUI.exe $portable
+          windeployqt --release --compiler-runtime --no-translations (Join-Path $portable 'Proxmark3GUI.exe')
+          if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed' }
+          Copy-Item LICENSE, OFFLINE.md, MIGRATION_STATUS.md, THIRD_PARTY_NOTICES.md $portable
+          Copy-Item LICENSES $portable -Recurse
+          New-Item -ItemType Directory -Force (Join-Path $portable 'scripts') | Out-Null
+          Copy-Item scripts/Set-OfflineFirewall.ps1 (Join-Path $portable 'scripts')
+          $mingwRoot = Split-Path (Split-Path (Get-Command g++.exe).Source -Parent) -Parent
+          $compilerNotices = Get-ChildItem $mingwRoot -Recurse -File | Where-Object {
+            $_.Name -match '^(COPYING|LICENSE|COPYRIGHT)(\..*)?$'
+          }
+          foreach ($notice in $compilerNotices) {
+            $relative = [System.IO.Path]::GetRelativePath($mingwRoot, $notice.FullName)
+            $destination = Join-Path $portable "LICENSES/MinGW-toolchain/$relative"
+            New-Item -ItemType Directory -Force (Split-Path $destination -Parent) | Out-Null
+            Copy-Item $notice.FullName $destination
+          }
+          @'
+          GUI-ONLY OFFLINE BUILD
+
+          This archive contains Proxmark3GUI and its Qt/MinGW runtime dependencies.
+          An optional firewall script is included for manual review and execution.
+          The GUI never executes that script or changes system firewall settings.
+          It does not contain proxmark3.exe, firmware, seller software, credentials,
+          dictionaries imported by users, card dumps or logs.
+
+          Supply a trusted local RRG/Iceman client separately. Choose a client and
+          device firmware built from the same source revision. Read OFFLINE.md.
+          A successful CI build does not certify device or command compatibility.
+          '@ | Set-Content -Encoding utf8 (Join-Path $portable 'GUI-ONLY.txt')
+          "Source: $env:GITHUB_REPOSITORY`nCommit: $env:GITHUB_SHA`nQt: 5.15.2`nTarget: Windows x64 MinGW 8.1`n" |
+            Set-Content -Encoding utf8 (Join-Path $portable 'BUILD-INFO.txt')
+          $unexpectedExecutables = @(Get-ChildItem $portable -Recurse -File -Filter '*.exe' |
+            Where-Object { $_.Name -ne 'Proxmark3GUI.exe' })
+          if ($unexpectedExecutables.Count -gt 0) {
+            throw 'Unexpected executable in GUI-only artifact'
+          }
+          if (-not (Test-Path (Join-Path $portable 'platforms/qwindows.dll'))) {
+            throw 'Qt Windows platform plugin is missing'
+          }
+          New-Item -ItemType Directory -Force artifacts | Out-Null
+          $archive = Join-Path $env:GITHUB_WORKSPACE 'artifacts/Proxmark3GUI-offline-windows-x64-GUI-only.zip'
+          Compress-Archive -Path $portable -DestinationPath $archive
+          $digest = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          "$digest  $(Split-Path $archive -Leaf)" |
+            Set-Content -Encoding ascii "$archive.sha256"
+
+      - name: Upload GUI-only portable artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Proxmark3GUI-offline-windows-x64-GUI-only
+          path: |
+            artifacts/Proxmark3GUI-offline-windows-x64-GUI-only.zip
+            artifacts/Proxmark3GUI-offline-windows-x64-GUI-only.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

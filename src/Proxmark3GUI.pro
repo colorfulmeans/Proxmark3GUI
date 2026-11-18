@@ -16,6 +16,10 @@ DEFINES += QT_DEPRECATED_WARNINGS
 #DEFINES += QT_DISABLE_DEPRECATED_BEFORE=0x060000    # disables all the APIs deprecated before Qt 6.0.0
 
 SOURCES += \
+    common/apppaths.cpp \
+    common/offlinepolicy.cpp \
+    common/localdictionary.cpp \
+    ui/localresourcesdialog.cpp \
     common/myeventfilter.cpp \
     main.cpp \
     common/pm3process.cpp \
@@ -30,6 +34,10 @@ SOURCES += \
     ui/mf_attack_hardnesteddialog.cpp \
 
 HEADERS += \
+    common/apppaths.h \
+    common/offlinepolicy.h \
+    common/localdictionary.h \
+    ui/localresourcesdialog.h \
     common/myeventfilter.h \
     common/pm3process.h \
     common/util.h \
@@ -59,10 +67,10 @@ qnx: target.path = /tmp/$${TARGET}/bin
 else: unix:!android: target.path = /opt/$${TARGET}/bin
 !isEmpty(target.path): INSTALLS += target
 
-VERSION = 0.2.8
-QMAKE_TARGET_PRODUCT = "Proxmark3GUI"
-QMAKE_TARGET_DESCRIPTION = "A cross-platform GUI for Proxmark3 client"
-QMAKE_TARGET_COMPANY = "wh201906"
+VERSION = 0.3.0
+QMAKE_TARGET_PRODUCT = "Proxmark3GUI Offline"
+QMAKE_TARGET_DESCRIPTION = "Local USB GUI for Proxmark3"
+QMAKE_TARGET_COMPANY = "colorfulmeans; based on wh201906"
 
 RESOURCES += \
     ../i18n/language.qrc \

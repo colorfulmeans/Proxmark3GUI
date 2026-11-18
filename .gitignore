@@ -1,2 +1,37 @@
 /build*
 /data
+
+# Offline fork: local builds, deployment staging and personal workspaces.
+/out/
+/artifacts/
+/portable/
+/runtime/
+/workspace/
+/workspaces/
+/user-data/
+/.proxmark3/
+**/.proxmark3/
+**/dumps/
+**/logs/
+**/keys/
+**/local-dictionaries/
+*.dump
+*.eml
+*.log
+*-dump.bin
+*-dump.json
+*-key.bin
+*-keys.bin
+*.pro.user*
+**/.qmake.stash
+**/.qmake.cache
+
+# Backend binaries and firmware are supplied separately, never copied from a
+# seller bundle into this source tree or a GUI-only CI artifact.
+/backend/
+/backends/
+/firmware/
+/proxmark3.exe
+/newproxmark3.exe
+/Config.ini
+/config.ini

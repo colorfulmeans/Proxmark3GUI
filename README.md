@@ -1,4 +1,26 @@
-# Proxmark3GUI
+# Proxmark3GUI — offline fork
+
+This fork builds on [wh201906/Proxmark3GUI](https://github.com/wh201906/Proxmark3GUI), a native Qt GUI for a separately supplied Proxmark3 client. It adds local resource management and an explicit local backend boundary. No seller account, seller service, cloud card analysis, or seller executable is part of this fork or its build artifacts.
+
+**Current status: source implementation, with physical-device compatibility still to be verified.** The Windows workflow produces a **GUI-only portable archive**, including Qt runtime dependencies. It does not include a Proxmark3 client or firmware. A successful build or unit test does not establish compatibility with a particular device, firmware, or RRG release.
+
+The local Linux GUI build and four QtTest projects have completed with **196 passed** results using Qt 5.15.2. The Windows workflow has not run remotely; its packaging and Windows execution remain to be verified.
+
+- [Offline use and build instructions / 离线使用与编译](OFFLINE.md)
+- [Feature migration status / 功能迁移状态](MIGRATION_STATUS.md)
+- [Windows Qt 5.15.2 and Linux Qt 5 build/test workflow](.github/workflows/build.yml)
+- [中文说明](doc/README/README_zh_CN.md)
+
+The GUI admits a reviewed subset of local client commands. It is not an operating-system network sandbox; a selected native client must also be trusted. This fork does not claim feature parity with a proprietary seller GUI or a validated current RRG version.
+
+The workflow is configured to create `Proxmark3GUI-offline-windows-x64-GUI-only.zip` and its SHA-256 file after successful tests. Check the actual workflow run and commit before using an artifact; the presence of the workflow file does not imply that a remote build has already succeeded.
+
+The upstream [LGPL-2.1 license](LICENSE) and attribution are retained. This fork is independent of Proxmark3 hardware vendors and RfidResearchGroup.
+
+## Historical upstream README
+
+The original README below is retained for project history and interface documentation. Its release links, download counts, bundled-client descriptions, build instructions, screenshots, and tutorials refer to upstream releases. They do not describe this fork's artifact or override [OFFLINE.md](OFFLINE.md). In particular, upstream release downloads do not contain the changes in this fork, and some historical environment/script settings are intentionally unavailable here.
+
 [![downloads](https://img.shields.io/github/downloads/wh201906/Proxmark3GUI/total?label=GitHub%20release%20downloads)](https://github.com/wh201906/Proxmark3GUI/releases)  
 [![downloads](https://img.shields.io/sourceforge/dt/proxmark3gui.svg?label=SourceForge%20downloads)](https://sourceforge.net/projects/proxmark3gui/)  
 

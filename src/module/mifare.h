@@ -66,7 +66,8 @@ public:
     static const AccessType trailerWriteCondition[8][3];
 
     QMap<QString, QString> info(bool isRequiringOutput = false);
-    void chk();
+    void chk(const QString& dictionaryFile = QString());
+    bool supportsLocalDictionary() const;
     void nested(bool isStaticNested = false);
     void darkside();
     void hardnested();

@@ -28,6 +28,7 @@
         },
         "check": {
             "cmd": "hf mf chk --<card type>",
+            "dictionary option": "-f",
             "card type": {
                 "mini": "mini",
                 "1k": "1k",
