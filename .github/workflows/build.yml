@@ -158,7 +158,20 @@ jobs:
           $portable = Join-Path $env:GITHUB_WORKSPACE 'portable/Proxmark3GUI-offline-gui-only'
           New-Item -ItemType Directory -Force $portable | Out-Null
           Copy-Item build-gui/Proxmark3GUI.exe $portable
-          windeployqt --release --compiler-runtime --no-translations (Join-Path $portable 'Proxmark3GUI.exe')
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $env:PATH = "$qtBin;$env:PATH"
+          $qtQmake = Join-Path $qtBin 'qmake.exe'
+          $qtDeploy = Join-Path $qtBin 'windeployqt.exe'
+          & $qtQmake -query
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot query the selected Qt SDK' }
+          $qtPlugins = (& $qtQmake -query QT_INSTALL_PLUGINS).Trim()
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot query the Qt plugin directory' }
+          $qtPlatforms = Join-Path $qtPlugins 'platforms'
+          if (-not (Test-Path (Join-Path $qtPlatforms 'qwindows.dll'))) {
+            throw "The selected Qt SDK has no Windows platform plugin at $qtPlatforms"
+          }
+          Get-ChildItem -LiteralPath $qtPlatforms -File | Select-Object Name, Length
+          & $qtDeploy --verbose 2 --release --compiler-runtime --no-translations (Join-Path $portable 'Proxmark3GUI.exe')
           if ($LASTEXITCODE -ne 0) { throw 'windeployqt failed' }
           Copy-Item LICENSE, OFFLINE.md, MIGRATION_STATUS.md, THIRD_PARTY_NOTICES.md $portable
           Copy-Item LICENSES $portable -Recurse
