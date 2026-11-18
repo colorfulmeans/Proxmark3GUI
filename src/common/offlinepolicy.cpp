@@ -1,3 +1,16 @@
+#if defined(_WIN32)
+// Use the Windows 7 API baseline in this translation unit. These definitions
+// must precede every Qt/Windows header so MinGW exposes GetFinalPathNameByHandleW.
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0601
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#if !defined(WINVER) || WINVER < 0x0601
+#undef WINVER
+#define WINVER _WIN32_WINNT
+#endif
+#endif
+
 #include "offlinepolicy.h"
 
 #include <QDir>
