@@ -67,7 +67,9 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 35
     env:
-      QT_QPA_PLATFORM: offscreen
+      # Exercise the same platform plugin shipped in the Windows package.
+      QT_QPA_PLATFORM: windows
+      QTEST_FUNCTION_TIMEOUT: '30000'
     defaults:
       run:
         shell: pwsh
@@ -119,6 +121,7 @@ jobs:
             Get-ChildItem $_.FullName -File -Filter '*.pro'
           })
           if ($projects.Count -eq 0) { throw 'No QtTest projects found in tests/*/*.pro' }
+          $failedProjects = @()
           foreach ($project in $projects) {
             $testBuild = Join-Path $env:GITHUB_WORKSPACE "build-tests/$($project.BaseName)"
             New-Item -ItemType Directory -Force $testBuild | Out-Null
@@ -133,11 +136,20 @@ jobs:
                 throw "Expected exactly one tst_*.exe in $testBuild; found $($testExecutables.Count)"
               }
               $testExecutable = $testExecutables[0].FullName
-              & $testExecutable
-              if ($LASTEXITCODE -ne 0) { throw "Tests failed: $($project.Name)" }
+              $testLog = Join-Path $testBuild 'test-results.txt'
+              & $testExecutable -o "$testLog,txt"
+              $testExitCode = $LASTEXITCODE
+              if (Test-Path -LiteralPath $testLog) { Get-Content -LiteralPath $testLog }
+              if ($testExitCode -ne 0) { throw "Tests failed: $($project.Name) (exit $testExitCode)" }
+            } catch {
+              $failedProjects += "$($project.Name): $($_.Exception.Message)"
+              Write-Warning $failedProjects[-1]
             } finally {
               Pop-Location
             }
+          }
+          if ($failedProjects.Count -gt 0) {
+            throw ("QtTest projects failed:`n" + ($failedProjects -join "`n"))
           }
 
       - name: Package GUI and Qt runtime only

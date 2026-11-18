@@ -124,6 +124,7 @@ mingw32-make -j2
 Build each `tests/*/*.pro` in its own directory with the same qmake configuration. From that test build directory, use PowerShell to run the single `tst_*.exe` by its full path and check its exit code:
 
 ```powershell
+$env:QT_QPA_PLATFORM = 'windows'
 $testExecutables = @(Get-ChildItem -LiteralPath (Get-Location).Path -File -Filter 'tst_*.exe')
 if ($testExecutables.Count -ne 1) {
     throw "Expected exactly one tst_*.exe; found $($testExecutables.Count)"
@@ -133,7 +134,7 @@ $testExecutable = $testExecutables[0].FullName
 if ($LASTEXITCODE -ne 0) { throw 'QtTest failed' }
 ```
 
-The workflow discovers test projects automatically, requires exactly one matching executable at the root of each build directory, and runs every test executable this way. This avoids relying on qmake's shell wrapper to find a Windows executable. Linux continues to use `make check`.
+The workflow discovers test projects automatically, requires exactly one matching executable at the root of each build directory, and runs every test executable this way. This avoids relying on qmake's shell wrapper to find a Windows executable. Windows tests use the native `windows` platform plugin included in the portable package; Linux headless tests use `offscreen` and `make check`. The Windows job prints a text result log for each project, collects failures across projects, and refuses packaging if any project fails.
 
 For packaging, the workflow copies the new GUI into a clean staging directory and runs `windeployqt --release --compiler-runtime --no-translations`. The result includes Qt/MinGW runtime dependencies, this guide, migration status, and build metadata. It creates `Proxmark3GUI-offline-windows-x64-GUI-only.zip` plus a SHA-256 file. No seller directory, client executable, firmware, imported dictionary, or user workspace is copied. The GUI cannot operate hardware without a separately supplied compatible client.
 

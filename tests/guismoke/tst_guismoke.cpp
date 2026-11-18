@@ -317,8 +317,10 @@ private slots:
 
 int main(int argc, char** argv)
 {
+#ifndef Q_OS_WIN
     if(qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
         qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+#endif
     QApplication application(argc, argv);
     GuiSmokeTest test;
     return QTest::qExec(&test, argc, argv);
