@@ -1,4 +1,5 @@
 #include <QtTest>
+#include <QAbstractButton>
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
@@ -19,6 +20,7 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QUuid>
+#include <functional>
 #include <memory>
 
 #include "common/apppaths.h"
@@ -34,6 +36,38 @@ class GuiSmokeTest : public QObject
 private:
     QString m_originalWorkingDirectory;
     QString m_testDataDirectory;
+
+    static void driveShownModal(QTimer& timer, QWidget& owner,
+                                const std::function<void(QDialog*)>& action)
+    {
+        // A zero-delay callback queued before exec() can run during the Windows
+        // showEvent path. Wait for a visible modal, then defer interaction again
+        // so its show/button initialization can unwind. The caller-owned timer
+        // cancels pending callbacks when the synchronous modal call returns.
+        timer.setInterval(20);
+        QObject::connect(&timer, &QTimer::timeout, &timer, [&timer, &owner, action]() {
+            QPointer<QDialog> dialog;
+            // Offscreen platforms need not report an active native window.
+            for(QDialog* candidate : owner.findChildren<QDialog*>(QString(), Qt::FindDirectChildrenOnly))
+                if(candidate->isVisible())
+                {
+                    dialog = candidate;
+                    break;
+                }
+            if(!dialog)
+                return;
+            timer.stop();
+            QTimer::singleShot(40, &timer, [&timer, dialog, action]() {
+                if(!dialog || !dialog->isVisible())
+                {
+                    timer.start();
+                    return;
+                }
+                action(dialog.data());
+            });
+        });
+        timer.start();
+    }
 
     QString createDictionary(QString* error)
     {
@@ -69,16 +103,13 @@ private:
 
         QString selected;
         bool dialogOpened = false;
-        QTimer::singleShot(0, &window, [&]() {
-            LocalResourcesDialog* dialog = window.findChild<LocalResourcesDialog*>();
+        QTimer modalTimer;
+        driveShownModal(modalTimer, window, [&](QDialog* modal) {
+            LocalResourcesDialog* dialog = qobject_cast<LocalResourcesDialog*>(modal);
             if(!dialog)
             {
                 *error = QStringLiteral("The toolbar did not open LocalResourcesDialog.");
-                // Always release an unexpected modal dialog instead of hanging
-                // the test process on a changed startup/error path.
-                for(QWidget* widget : QApplication::topLevelWidgets())
-                    if(QDialog* other = qobject_cast<QDialog*>(widget))
-                        other->reject();
+                modal->reject();
                 return;
             }
             dialogOpened = true;
@@ -100,6 +131,7 @@ private:
                 dialog->reject();
         });
         action->trigger(); // Exercises MainWindow::manageLocalDictionaries().
+        modalTimer.stop();
         QCoreApplication::processEvents();
         if(!dialogOpened && error->isEmpty())
             *error = QStringLiteral("The resources dialog did not open.");
@@ -256,15 +288,25 @@ private slots:
         QVERIFY(util);
         QSignalSpy writeSpy(util, &Util::write);
         bool rejectedProfile = false;
-        QTimer::singleShot(0, window.get(), [&]() {
-            if(QMessageBox* message = window->findChild<QMessageBox*>())
+        QTimer modalTimer;
+        driveShownModal(modalTimer, *window, [&](QDialog* modal) {
+            if(QMessageBox* message = qobject_cast<QMessageBox*>(modal))
             {
+                QAbstractButton* ok = message->button(QMessageBox::Ok);
+                if(!ok || !ok->isVisible() || !ok->isEnabled())
+                {
+                    modalTimer.start();
+                    return;
+                }
                 rejectedProfile = message->text().contains(QStringLiteral("dictionary option"));
-                message->accept();
+                ok->click();
             }
+            else
+                modal->reject();
         });
         window->onPM3StateChanged(true, QStringLiteral("test-only GUI state"));
         QVERIFY(QMetaObject::invokeMethod(window.get(), "on_MF_Attack_chkButton_clicked", Qt::DirectConnection));
+        modalTimer.stop();
         QVERIFY(rejectedProfile);
         QCOMPARE(writeSpy.count(), 0);
         const QStringList staged = QDir(AppPaths::workspaceDirectory()).entryList(

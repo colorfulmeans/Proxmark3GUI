@@ -30,15 +30,26 @@ This offline fork of `wh201906/Proxmark3GUI` starts from commit `b74ad1b0de83af9
 
 ## Local validation record / 本地验证记录
 
-Validated locally on Linux with Qt 5.15.2 on 2026-11-18:
+The initial local Linux / Qt 5.15.2 validation on 2026-11-18 is preserved below. It is separate from the commit-specific remote evidence that follows:
 
 - The GUI compiled successfully.
 - Four QtTest projects (`offlinepolicy`, `localdictionary`, `processboundary`, and `guismoke`) completed with **196 passed** results in total.
 - Process-boundary tests exercised the actual `PM3Process`/`Util` integration with a native synthetic fixture. GUI tests exercised startup, local resource selection, and dictionary staging/cleanup. No seller executable or real Proxmark3 device was used.
 - Both translation catalogs include 104 added translated messages; the pre-existing translation text and placeholders were checked for preservation. Both `.qm` files were regenerated with Qt 5 tools.
-- The Windows workflow has not run remotely. Windows portable execution, firewall-rule enforcement, and physical-device compatibility remain unverified.
+- These local results do not verify Windows portable execution, firewall-rule enforcement, a Defender verdict, or physical-device compatibility.
 
-2026-11-18 在本地 Linux / Qt 5.15.2 环境完成验证：GUI 编译成功；四个 QtTest 工程合计 **196 项通过**。进程测试使用实际 `PM3Process`/`Util` 与原生模拟测试程序，GUI 测试覆盖启动、本地资源选用及字典暂存与清理，没有运行卖家程序，也没有使用真实 PM3 硬件。两份语言表新增 104 条翻译，核对保留既有译文和占位符，并重新生成 `.qm`。Windows 工作流尚未远程运行，Windows 制品运行、防火墙实际阻断及物理设备兼容性仍未验证。
+2026-11-18 首次本地 Linux / Qt 5.15.2 验证记录予以保留：GUI 编译成功；四个 QtTest 工程合计 **196 项通过**。进程测试使用实际 `PM3Process`/`Util` 与原生模拟测试程序，GUI 测试覆盖启动、本地资源选用及字典暂存与清理，没有运行卖家程序，也没有使用真实 PM3 硬件。两份语言表新增 104 条翻译，核对保留既有译文和占位符，并重新生成 `.qm`。本地结果不验证 Windows 制品运行、防火墙实际阻断、Defender 判断或物理设备兼容性。
+
+## Remote Actions evidence / 远程 Actions 证据
+
+The published fork is [colorfulmeans/Proxmark3GUI](https://github.com/colorfulmeans/Proxmark3GUI). For commit `c03d3b584bd31f1bf5fefc7a6cf9de266439cb60`, [run 44323970258](https://github.com/colorfulmeans/Proxmark3GUI/actions/runs/44323970258) records:
+
+- [Linux job](https://github.com/colorfulmeans/Proxmark3GUI/actions/runs/44323970258/job/134870125668): GUI compilation and all four QtTest projects succeeded; the logs report **196 passed, 0 failed, 0 skipped**.
+- [Windows job](https://github.com/colorfulmeans/Proxmark3GUI/actions/runs/44323970258/job/134870126190): GUI compilation succeeded, the QtTest step failed, and packaging/upload were skipped. That run produced no Windows GUI-only artifact.
+
+以上是指定提交与指定运行的历史证据：Linux 编译及四组测试成功，日志合计 **196 项通过、0 失败、0 跳过**；Windows GUI 编译成功，但测试步骤失败，打包和上传被跳过，该次运行没有 Windows 纯 GUI 制品。后续提交应在 [Actions](https://github.com/colorfulmeans/Proxmark3GUI/actions) 中核对对应 SHA、各 job 和制品，不应沿用旧提交的结果。CI 结果不替代硬件、Defender 或防火墙实际效果验证。
+
+For later revisions, check the matching commit SHA, individual jobs, and artifacts on [Actions](https://github.com/colorfulmeans/Proxmark3GUI/actions). These results do not automatically apply to a newer commit or establish hardware, Defender, or firewall behavior. See [VALIDATION.md](VALIDATION.md) for the recorded test counts and limits.
 
 ## What tests establish / 测试能证明什么
 
